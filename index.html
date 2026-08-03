@@ -119,7 +119,7 @@
   </div>
 
 <script>
-  // ── ตั้งค่า: ใส่ค่าจากไฟล์ .env ของโปรเจกต์ (EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY) ──
+  // ── ตั้งค่า: ใส่ค่าจากไฟล์ .env ของโปรเจกต์ ──
   const SUPABASE_URL = 'https://uuumnuxkncdrkuqsghvb.supabase.co';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV1dW1udXhrbmNkcmt1cXNnaHZiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3ODIyNzQsImV4cCI6MjA5OTM1ODI3NH0.D9aJENgxvAEU2UTx19NYKGCIGXmMvYq4bOXx6gSaXYA';
 
@@ -146,50 +146,74 @@
     msgBox.className = 'msg show ' + type;
   }
 
-  // ดึง access_token / refresh_token จาก URL fragment ที่ Supabase แนบมาให้ตอน redirect กลับมา
-  function getTokensFromUrl() {
-    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
-    const params = new URLSearchParams(hash);
-    return {
-      access_token: params.get('access_token'),
-      refresh_token: params.get('refresh_token'),
-      type: params.get('type'),
-      error_description: params.get('error_description'),
-    };
-  }
-
   async function init() {
-    const tokens = getTokensFromUrl();
+    // 1. ลองดึงแบบ PKCE Flow (?code=...)
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
 
-    if (tokens.error_description) {
+    if (code) {
+      // แลก Code เป็น Session
+      const { error } = await supabaseClient.auth.exchangeCodeForSession(code);
+      if (error) {
+        subText.textContent = 'ลิงก์นี้ใช้ไม่ได้แล้ว';
+        showMsg(error.message + ' — กรุณากลับไปกดขอลิงก์ใหม่ในแอป', 'error');
+        submitBtn.textContent = 'ลิงก์หมดอายุ';
+        return;
+      }
+      
+      // สำเร็จ!
+      subText.textContent = 'กรอกรหัสผ่านใหม่ที่ต้องการใช้เข้าสู่ระบบ';
+      submitBtn.textContent = 'บันทึกรหัสผ่านใหม่';
+      submitBtn.disabled = false;
+      return;
+    }
+
+    // 2. ถ้าไม่มี code ลองดึงแบบ Hash Fragment (#access_token=...)
+    const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+    const hashParams = new URLSearchParams(hash);
+    const accessToken = hashParams.get('access_token');
+    const refreshToken = hashParams.get('refresh_token');
+    const errorDesc = hashParams.get('error_description');
+
+    if (errorDesc) {
       subText.textContent = 'ลิงก์นี้ใช้ไม่ได้แล้ว';
-      showMsg(decodeURIComponent(tokens.error_description.replace(/\+/g, ' ')) + ' — กรุณากลับไปกดขอลิงก์ใหม่ในแอป', 'error');
+      showMsg(decodeURIComponent(errorDesc.replace(/\+/g, ' ')) + ' — กรุณากลับไปกดขอลิงก์ใหม่ในแอป', 'error');
       submitBtn.textContent = 'ลิงก์หมดอายุ';
       return;
     }
 
-    if (!tokens.access_token || !tokens.refresh_token || tokens.type !== 'recovery') {
-      subText.textContent = 'ไม่พบข้อมูลลิงก์ที่ถูกต้อง';
-      showMsg('กรุณาเปิดหน้านี้จากลิงก์ในอีเมลที่ได้รับจากแอปเท่านั้น', 'error');
-      submitBtn.textContent = 'ลิงก์ไม่ถูกต้อง';
+    if (accessToken && refreshToken) {
+      const { error } = await supabaseClient.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      if (error) {
+        subText.textContent = 'ลิงก์นี้ใช้ไม่ได้แล้ว';
+        showMsg(error.message + ' — กรุณากลับไปกดขอลิงก์ใหม่ในแอป', 'error');
+        submitBtn.textContent = 'ลิงก์หมดอายุ';
+        return;
+      }
+
+      subText.textContent = 'กรอกรอกรหัสผ่านใหม่ที่ต้องการใช้เข้าสู่ระบบ';
+      submitBtn.textContent = 'บันทึกรหัสผ่านใหม่';
+      submitBtn.disabled = false;
       return;
     }
 
-    const { error } = await supabaseClient.auth.setSession({
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-    });
-
-    if (error) {
-      subText.textContent = 'ลิงก์นี้ใช้ไม่ได้แล้ว';
-      showMsg(error.message + ' — กรุณากลับไปกดขอลิงก์ใหม่ในแอป', 'error');
-      submitBtn.textContent = 'ลิงก์หมดอายุ';
+    // 3. เช็กว่ามี Session ค้างไว้อยู่แล้วหรือไม่
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session) {
+      subText.textContent = 'กรอกรหัสผ่านใหม่ที่ต้องการใช้เข้าสู่ระบบ';
+      submitBtn.textContent = 'บันทึกรหัสผ่านใหม่';
+      submitBtn.disabled = false;
       return;
     }
 
-    subText.textContent = 'กรอกรหัสผ่านใหม่ที่ต้องการใช้เข้าสู่ระบบ';
-    submitBtn.textContent = 'บันทึกรหัสผ่านใหม่';
-    submitBtn.disabled = false;
+    // ถ้าไม่มีทุกอย่าง แสดงว่าเปิดเข้ามาลอยๆ
+    subText.textContent = 'ไม่พบข้อมูลลิงก์ที่ถูกต้อง';
+    showMsg('กรุณาเปิดหน้านี้จากลิงก์ในอีเมลที่ได้รับจากแอปเท่านั้น', 'error');
+    submitBtn.textContent = 'ลิงก์ไม่ถูกต้อง';
   }
 
   submitBtn.addEventListener('click', async () => {
